@@ -2,7 +2,7 @@
 
 ブラウザ組み込みローカルモデル（Gemini Nano）が、1文字ずつ交代しながら俳句を書きます。
 
-https://ef81sp.github.io/relay-haiku/
+https://haiku.p-craft.dev/
 
 ## 動く環境
 
