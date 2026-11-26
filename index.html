@@ -1,0 +1,1189 @@
+<!doctype html>
+<html lang="ja">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>リレー俳句</title>
+<meta name="description" content="ブラウザ組み込みローカルモデルが、1文字ずつ交代しながら俳句を書きます。">
+<meta property="og:type" content="website">
+<meta property="og:site_name" content="リレー俳句">
+<meta property="og:title" content="リレー俳句">
+<meta property="og:description" content="ブラウザ組み込みローカルモデルが、1文字ずつ交代しながら俳句を書きます。">
+<meta property="og:url" content="https://ef81sp.github.io/relay-haiku/">
+<meta property="og:image" content="https://ef81sp.github.io/relay-haiku/ogp.png">
+<meta property="og:image:width" content="1200">
+<meta property="og:image:height" content="630">
+<meta property="og:image:alt" content="4枚の短冊に、AIが1字ずつ書き継いだひらがなの俳句が並ぶ画面">
+<meta property="og:locale" content="ja_JP">
+<meta name="twitter:card" content="summary_large_image">
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Yuji+Syuku&family=Shippori+Mincho:wght@500;600&family=Zen+Kaku+Gothic+New:wght@400;500&display=swap">
+<style>
+/* 紙と墨：短冊はどちらの表示でも白い紙に墨の字。地（机）だけが明暗で変わる。
+   短冊には書いた字だけを置く。見せ場は「一字が置かれる瞬間」だけ */
+:root{
+  --ground:#d5dcd8; --ink:#1b1d24; --muted:#4d575c; --ai:#23407a; --on-ai:#fff; --shu:#9e2a22;
+  --paper:#fbfaf5; --ink-paper:#1b1d24;
+  --line:color-mix(in srgb,var(--ink) 16%,transparent);
+  /* 地の上の書き手の色。名札の字と執筆中の枠に使うので、地に対して 4.5:1 以上にする */
+  --g1:#8a2858; --g2:#1f5c7a; --g3:#765010; --g4:#2c6229;
+  --brush:"Yuji Syuku","Shippori Mincho","Hiragino Mincho ProN","Yu Mincho",serif;
+  --mincho:"Shippori Mincho","Hiragino Mincho ProN","Yu Mincho",serif;
+  --gothic:"Zen Kaku Gothic New","Hiragino Sans","Yu Gothic",system-ui,sans-serif;
+  color-scheme:light;
+}
+@media (prefers-color-scheme:dark){:root{
+  --ground:#12161d; --ink:#e4e2da; --muted:#98a0a8; --ai:#9db4ec; --on-ai:#10141c; --shu:#e8604f;
+  --paper:#e8e5da;
+  --g1:#e58fbd; --g2:#80bcdb; --g3:#e2b562; --g4:#90c988;
+  color-scheme:dark}}
+*{box-sizing:border-box}
+[hidden]{display:none!important}
+body{margin:0;background:var(--ground);color:var(--ink);font:16px/1.7 var(--gothic);padding:24px 16px 96px}
+.wrap{max-width:1200px;margin:0 auto;display:grid;gap:20px}
+.sr{position:absolute;width:1px;height:1px;overflow:hidden;clip-path:inset(50%);white-space:nowrap}
+:focus-visible{outline:2px solid var(--ai);outline-offset:2px}
+
+/* 題と設定：箱に入れず、文として読む */
+.top{display:flex;flex-wrap:wrap;align-items:baseline;gap:4px 20px}
+/* 筆書体の「リ」は字の左に余白が広く、下の説明文より右に見えるので、墨の左端がそろうよう左へ寄せる（測定で約4.4px＝0.15em） */
+h1{font:400 38px/1.2 var(--brush);letter-spacing:.12em;margin:0 0 0 -.15em}
+/* サブタイトル：控えめに添える */
+.tag{margin:0;font:400 15px var(--gothic);letter-spacing:.04em;color:var(--muted)}
+/* 説明：題とサブタイトルの下の行に置く */
+.desc{flex-basis:100%;margin:4px 0 0;font:400 17px/1.7 var(--gothic);color:var(--ink)}
+.bar{display:flex;flex-wrap:wrap;align-items:center;gap:10px 16px}
+.bar .status{flex:1}
+.actions{display:flex;gap:8px;margin-left:auto}
+.actions{align-items:center}
+.actions button{min-inline-size:6.5em}
+/* 手動／自動：二つ並びの切り替え。選んでいる方を塗る */
+.mode{display:inline-flex;border:1px solid var(--ai);border-radius:3px;overflow:hidden;margin:0 8px 0 0;padding:0;min-inline-size:0}
+.mode label{position:relative;padding:7px 14px;font-size:16px;color:var(--ai);cursor:pointer}
+.mode input{position:absolute;opacity:0;inset:0;margin:0;cursor:pointer}
+.mode label:has(:checked){background:var(--ai);color:var(--on-ai)}
+.mode label:has(:focus-visible){outline:2px solid var(--ai);outline-offset:2px}
+button{font:500 17px var(--gothic);cursor:pointer;border-radius:3px;padding:8px 24px;border:1px solid var(--ai);background:var(--ai);color:var(--on-ai)}
+button.ghost{background:transparent;color:var(--ai);padding:8px 16px}
+button:disabled{opacity:.35;cursor:not-allowed}
+/* 取得ボタンの波紋：ボタンの周りに光の輪が2重に広がって消える（動きを減らす設定では止まる） */
+#fetch.pulse{animation:ripple 2.2s cubic-bezier(.2,.6,.3,1) infinite}
+@keyframes ripple{
+  0%{box-shadow:0 0 0 0 color-mix(in srgb,var(--ai) 70%,transparent),0 0 0 0 color-mix(in srgb,var(--ai) 45%,transparent)}
+  70%,100%{box-shadow:0 0 0 10px color-mix(in srgb,var(--ai) 0%,transparent),0 0 0 22px color-mix(in srgb,var(--ai) 0%,transparent)}}
+.status{display:flex;flex-wrap:wrap;align-items:center;gap:4px 18px;font-size:15px;color:var(--muted);margin:0}
+.status b{color:var(--ink);font-weight:500}
+.status b.bad{color:var(--shu)}
+.status .now{min-inline-size:17em}
+progress{width:140px;vertical-align:middle;accent-color:var(--ai)}
+/* 進み具合：17の点を五・七・五に区切る */
+.progress{display:inline-flex;align-items:center;gap:3px}
+.progress i{width:9px;height:9px;border-radius:50%;border:1px solid var(--muted);display:block}
+.progress i.on{background:var(--ink);border-color:var(--ink)}
+.progress i.cut{margin-left:9px}
+
+/* 舞台：始める前から公開まで同じ配置。4枚の短冊を横一列に固定し、各短冊の上に名札、下に感想と書いた順を置く。
+   短冊は5・7・5を3列に分けて書くので、字を大きくできる。名札だけが配り直しのたびに短冊の間を移る。
+   1段目（名札）の高さは公開でも空けたままにして、短冊の位置を動かさない */
+.stage{--tz:clamp(16px,min(calc((min(100vw,1200px) - 32px - 3 * 20px) / 4 / 7),calc((100svh - 300px) / 10.5)),46px);
+  display:grid;grid-template-columns:repeat(4,minmax(0,1fr));gap:24px 20px}
+.poem{display:grid;grid-template-rows:30px auto auto;justify-items:center;align-content:start;min-width:0}
+.poem>.tz{grid-row:2}
+/* 名札・感想は短冊と同じ幅にして、短冊の左端にそろえる（短冊の幅は 3 × 1.65em + 1.3em） */
+.side{grid-row:1;display:grid;justify-items:start;align-content:start;gap:8px;min-width:0;width:calc(var(--tz) * 6.25);max-width:100%}
+.stage[data-phase="reveal"] .side{grid-row:3;margin-top:10px}
+.seat .dot,.trace li i{width:8px;height:8px;border-radius:50%;background:var(--gs);display:inline-block;flex:none}
+.seat header{display:flex;flex-wrap:wrap;justify-content:flex-start;align-items:center;gap:0 6px;font-size:15px;white-space:nowrap;color:var(--muted);min-height:26px}
+.seat .state{font-size:14px;color:var(--gs);min-inline-size:3.2em}
+.seat.think header{color:var(--ink);font-weight:500}
+/* 執筆中の紙は動かさず、書き手の色の枠で囲む（outline なので並びは変わらない） */
+.seat .tz{outline:2px solid transparent;outline-offset:5px;transition:outline-color .25s}
+.seat.think .tz{outline-color:var(--gs)}
+
+/* 短冊 */
+/* 5・7・5を3列に書く（右から1行目）。高さは7字ぶん、幅は3列ぶん */
+.tz{writing-mode:vertical-rl;font:400 var(--tz)/1.65 var(--brush);letter-spacing:.12em;color:var(--ink-paper);
+  inline-size:calc(7 * 1.12em + 1.8em);block-size:calc(3 * 1.65em + 1.3em);white-space:nowrap;padding:.9em .65em;
+  background:var(--paper);border-radius:1px;box-shadow:0 1px 2px rgb(0 0 0/.18)}
+.tz .new{animation:ink .42s cubic-bezier(.2,.7,.2,1) both}
+@keyframes ink{from{opacity:0;filter:blur(3px);scale:1.2}}
+.empty{font:15px var(--mincho);color:var(--muted);text-align:center;width:100%;margin:0}
+
+/* 公開：短冊はそのまま、左に清書（漢字かなまじり）と感想を出す */
+.note{margin:0;font:16px/1.8 var(--mincho);text-align:left;max-width:100%;text-wrap:pretty}
+.note.wait{color:var(--muted)}
+.trace{font-size:14px}
+.trace summary{cursor:pointer;color:var(--muted);text-align:left}
+.trace ol{margin:6px 0 0;padding-left:2em;display:grid;gap:2px}
+
+/* ログと手順：枠を付けず上罫線だけ */
+details.aside{border-top:1px solid var(--line);padding-top:10px}
+details.aside summary{cursor:pointer;color:var(--muted)}
+/* 非対応の知らせ */
+#unsupported{max-width:min(30em,calc(100vw - 32px));border:1px solid var(--line);border-radius:6px;background:var(--ground);color:var(--ink);padding:20px 22px;box-shadow:0 10px 40px rgb(0 0 0/.35)}
+#unsupported::backdrop{background:rgb(0 0 0/.45)}
+#unsupported h2{margin:0 0 8px;font:600 20px/1.5 var(--mincho)}
+#unsupported p{margin:0 0 16px;line-height:1.8}
+.dialog-actions{display:flex;justify-content:flex-end;gap:8px;flex-wrap:wrap}
+/* 仕組みの説明と図 */
+/* 文ごとに改行し、行の中で折り返すときも文節の切れ目で折り返す（word-break:auto-phrase） */
+.how-text{margin:8px 0 10px;font-size:16px;line-height:1.8;word-break:auto-phrase;text-wrap:pretty}
+.how-text span{display:block}
+.how-fig{display:block;width:100%;max-width:760px;height:auto}
+.how-fig .how-n rect{fill:color-mix(in srgb,var(--ink) 5%,transparent);stroke:var(--line);stroke-width:1.5}
+.how-fig .how-n.ai rect{stroke:var(--ai)}
+.how-fig text{font:500 13px var(--gothic);fill:var(--ink);text-anchor:middle}
+.how-fig .how-cap{font-size:11.5px;fill:var(--muted)}
+.how-fig .how-cap.ai{fill:var(--ai)}
+.how-fig line,.how-fig path{fill:none;stroke:var(--muted);stroke-width:1.5}
+.how-fig .how-ah{fill:var(--muted);stroke:none}
+details.aside ol{margin:8px 0 4px;padding-left:1.4em;display:grid;gap:4px}
+.log-note{font-size:15px;color:var(--muted);margin:8px 0}
+.log-wrap{overflow-x:auto;max-height:70vh;overflow-y:auto;margin-top:8px;border:1px solid var(--line)}
+.log{border-collapse:collapse;font-size:13px;min-width:900px}
+.log th{position:sticky;top:0;background:var(--ground);text-align:left}
+.log th,.log td{padding:4px 8px;border-bottom:1px solid var(--line);vertical-align:top;white-space:pre-wrap;font-variant-numeric:tabular-nums}
+.log td:nth-child(6),.log td:nth-child(7){min-width:220px;max-width:420px}
+.log tr.move td{font-weight:500;background:color-mix(in srgb,var(--ink) 6%,transparent)}
+code{font:14px ui-monospace,Menlo,monospace;background:color-mix(in srgb,var(--ink) 8%,transparent);padding:1px 5px;border-radius:3px;word-break:break-all}
+@media (prefers-reduced-motion:reduce){*{animation:none!important;transition:none!important}}
+/* 狭い画面では2列にする（縦に長くなるのは仕方ない） */
+@media (max-width:760px){.stage{grid-template-columns:repeat(2,minmax(0,1fr));--tz:clamp(16px,calc((100vw - 32px - 20px) / 2 / 7),40px)}}
+@media (max-width:560px){
+  .actions{margin-left:0;width:100%}.actions #start{flex:1}
+}
+</style>
+</head>
+<body>
+<main class="wrap">
+  <header class="top">
+    <h1>リレー俳句</h1>
+    <p class="tag">powered by Gemini Nano</p>
+    <p class="desc">ブラウザ組み込みローカルモデルが、1文字ずつ交代しながら俳句を書きます。</p>
+  </header>
+
+  <div class="bar">
+    <!-- 読み上げは段階の大きな変わり目だけ（一手ごとの字数や秒読みは読み上げない） -->
+    <p class="sr" id="announce" aria-live="polite"></p>
+    <p class="status">
+      <span>内蔵AI：<b id="api">確認中</b></span>
+      <span id="dl" hidden><progress id="dlbar" max="1" value="0" aria-label="モデルの取得"></progress> <b id="dlpct"></b></span>
+      <span class="progress" id="progress" aria-hidden="true"></span>
+      <span class="now"><span id="count-label"></span> <b id="phase"></b></span>
+    </p>
+    <div class="actions">
+      <fieldset class="mode">
+        <legend class="sr">回の進め方</legend>
+        <label><input type="radio" name="mode" value="manual" checked>手動</label>
+        <label><input type="radio" name="mode" value="auto">自動</label>
+      </fieldset>
+      <!-- モデルが未取得のあいだは、始めるの代わりに取得ボタンを主ボタンの位置に出す（目立つよう波紋の動きを付ける） -->
+      <button id="fetch" type="button" class="pulse" hidden>モデルを取得（数GB）</button>
+      <button id="start" type="button" disabled>始める</button>
+      <button id="stop" type="button" class="ghost" hidden>中止</button>
+    </div>
+  </div>
+
+  <section class="stage" id="stage" aria-label="用紙"></section>
+
+  <details id="howto" class="aside">
+    <summary>仕組み</summary>
+    <p class="how-text"><span>4人のAIが4枚の紙を回しながら、1手に1字ずつ書いていきます。</span><span>AIは Chrome に組み込まれたローカルモデル Gemini Nano で、この端末の中だけで動きます。</span><span>4人は同じモデルに、それぞれ違う性格を与えたものです。</span><span>紙を受け取ったAIは、お題と紙に書かれた字だけを読んで、いまの行の続きを自由に思い描きます。</span><span>Nano は小さなモデルで、字数を合わせて意味の通る行を書くのが苦手なので、辞書で手助けします。</span><span>続きが辞書の語で5・7・5の行に収まるか、前の行と同じ言葉をくり返していないかをプログラムが確かめ、判定役のAIが意味が通るかを判定します。</span><span>AIの続きが使えないときは、プログラムがAIの思い描いた語や辞書の語から別の続きを組み、同じように確かめます。</span><span>通った続きの次の1字だけを紙に書き、次の人へ回します。どの続きも判定を通らないときも、1字は必ず書きます。</span><span>前の人が何を考えていたかは伝わらないので、読み替えが重なって思わぬ句になります。</span></p>
+    <svg class="how-fig" viewBox="0 0 640 176" role="img" aria-labelledby="how-t">
+      <title id="how-t">一手の流れ：紙を受け取る、続きを思い描く、行に収まるか確かめる、意味を判定する、1字書いて次の人へ回す。使えないときは辞書で別の続きを組み直す</title>
+      <defs><marker id="how-a" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto"><path d="M0 0 L10 5 L0 10 z" class="how-ah"/></marker></defs>
+      <g class="how-n"><rect x="4" y="30" width="104" height="54" rx="6"/><text x="56" y="54">紙を</text><text x="56" y="72">受け取る</text></g>
+      <g class="how-n ai"><rect x="134" y="30" width="104" height="54" rx="6"/><text x="186" y="54">続きを</text><text x="186" y="72">思い描く</text></g>
+      <g class="how-n"><rect x="264" y="30" width="104" height="54" rx="6"/><text x="316" y="54">5・7・5に</text><text x="316" y="72">収まるか</text></g>
+      <g class="how-n ai"><rect x="394" y="30" width="104" height="54" rx="6"/><text x="446" y="54">意味が</text><text x="446" y="72">通るか</text></g>
+      <g class="how-n"><rect x="524" y="30" width="112" height="54" rx="6"/><text x="580" y="54">1字だけ</text><text x="580" y="72">書いて回す</text></g>
+      <line x1="108" y1="57" x2="132" y2="57" marker-end="url(#how-a)"/><line x1="238" y1="57" x2="262" y2="57" marker-end="url(#how-a)"/>
+      <line x1="368" y1="57" x2="392" y2="57" marker-end="url(#how-a)"/><line x1="498" y1="57" x2="522" y2="57" marker-end="url(#how-a)"/>
+      <path d="M446 84 L446 104 L316 104 L316 86" stroke-dasharray="4 3" marker-end="url(#how-a)"/>
+      <text x="381" y="122" class="how-cap">使えなければ辞書で組み直す</text>
+      <path d="M580 84 L580 142 L56 142 L56 86" marker-end="url(#how-a)"/>
+      <text x="318" y="164" class="how-cap">17字になるまで繰り返す</text>
+      <text x="186" y="22" class="how-cap ai">AI</text><text x="316" y="22" class="how-cap">辞書</text><text x="446" y="22" class="how-cap ai">判定するAI</text>
+    </svg>
+  </details>
+
+  <details id="logbox" class="aside">
+    <summary>ログ（<span id="log-count">0</span>件）</summary>
+    <p class="log-note">内蔵AIへの呼び出しごとに、プロンプト・かかった秒数・返ってきた内容を記録します。太字の行は、その手で実際に書いた字です。お手本の部分は表では省き、保存したファイルには全部入れます。</p>
+    <p class="log-note">公開まで終わった回は、このブラウザに記録として溜まっていきます（これまで <b id="hist-count">0</b> 回、プロンプトの版 <b id="variant"></b>）。</p>
+    <button type="button" class="ghost" id="log-save">この回のログを保存（JSON）</button>
+    <button type="button" class="ghost" id="hist-save">記録を全部保存（JSON）</button>
+    <button type="button" class="ghost" id="hist-clear">記録を消す</button>
+    <div class="log-wrap"><table class="log"><caption class="sr">この回の呼び出しと手の一覧</caption>
+      <thead><tr><th>経過秒</th><th>誰</th><th>用紙</th><th>種類</th><th>秒</th><th>プロンプト／用紙</th><th>返答／想像した句</th><th>字</th></tr></thead>
+      <tbody id="log-rows"></tbody>
+    </table></div>
+  </details>
+
+  <details id="setup" class="aside">
+    <summary>内蔵AIが利用不可のとき</summary>
+    <ol>
+      <li>動作環境：パソコン版 Chrome 148 以降。設定・フラグの変更は不要。</li>
+      <li>空き容量：Chrome のプロフィールの保存先ディスクに 22 GB 以上。不足時は「取得中」のまま停止。</li>
+      <li>性能：GPU メモリ 4 GB 超、または メモリ 16 GB 以上・CPU 4 コア以上のパソコン。</li>
+      <li>モデル取得：「モデルを取得」ボタンで開始。初回は数 GB のダウンロード。空き容量の確保直後は、Chrome の再起動が必要な場合あり。</li>
+      <li>それでも利用不可の場合：<code>chrome://on-device-internals</code> の Broker State でモデルの状態を確認。クラッシュ回数が上限到達なら Reset を実行し、Chrome を再起動。</li>
+    </ol>
+  </details>
+</main>
+
+<!-- 非対応の環境で開いたときの知らせ -->
+<dialog id="unsupported" aria-labelledby="unsupported-title">
+  <h2 id="unsupported-title">この環境では遊べません</h2>
+  <p id="unsupported-text"></p>
+  <div class="dialog-actions">
+    <button type="button" class="ghost" id="unsupported-close">閉じる</button>
+    <button type="button" id="unsupported-help">条件を見る</button>
+  </div>
+</dialog>
+
+<!-- 行の候補を組むための辞書（読み・品詞） -->
+<script src="haiku-dict.js"></script>
+<script>
+(() => {
+const $ = s => document.querySelector(s);
+const HIRA = [...'あいうえおかきくけこがぎぐげごさしすせそざじずぜぞたちつてとだぢづでどなにぬねのはひふへほばびぶべぼぱぴぷぺぽまみむめもやゆよらりるれろわをんぁぃぅぇぉっゃゅょ'];
+// AIが書く字。小さい「ゃゅょぁぃぅぇぉ」は字数と音数がずれるので使わない（「っ」は使う）
+const KANA = HIRA.filter(c => !'ゃゅょぁぃぅぇぉ'.includes(c));
+// 書き出しの字。濁音・半濁音・ら行など、和語の頭に来にくい字は外す
+const START = [...'あいうえおかきこさしすそたちつてとなにのはひふほまみむもやゆよわ'];
+const LEN = 17;
+const LANG = {expectedInputs:[{type:'text',languages:['ja']}],expectedOutputs:[{type:'text',languages:['ja']}]};
+const ROWS = [5, 7, 5];
+const SYSTEM = 'あなたは、子どもにも読める今のことばで俳句を作ります。むずかしい古いことばは使いません。';
+// 用紙ごとのお題。同じ用紙では全員が同じ方向を想像するので句がつながり、用紙どうしは違う内容になる
+const THEMES = ['はる','なつ','あき','ふゆ','うみ','やま','そら','つき','あめ','ゆき','はな','ねこ','いぬ','とり','たべもの','あさ','よる','まち','がっこう','ねむい'];
+// AIごとの持ち味。お題とぶつからないよう、題材でなく調子だけを決める
+const MOODS = ['きれいな句がすきです。','くすっとわらえる句がすきです。','やさしい句がすきです。','ふしぎな句がすきです。','げんきな句がすきです。','のんびりした句がすきです。'];
+// AIの好み：好きなもの12種 × ことばの癖5種。好きなものの語は、その AI の手番で行の候補に混ぜる（辞書にある語だけ使う）。
+// 癖は、候補の組み方の偏りとしてコードで出す（STYLE_CLS・isOto）。1回の4人には、好きなものが重ならないように配る
+const LIKES = [
+  ['動物', 'ねこ いぬ うさぎ くま きつね たぬき うま うし ぶた ひつじ さる しか りす ねずみ かえる へび かめ'],
+  ['鳥', 'すずめ からす つばめ はと かも つる さぎ ひばり うぐいす とり たまご はね くちばし す'],
+  ['虫', 'とんぼ はち あり せみ ほたる かぶとむし くも ばった こおろぎ いもむし みのむし'],
+  ['花と木', 'さくら うめ もみじ すみれ たんぽぽ つばき ばら ゆり きく あじさい まつ すぎ くさ はな もり'],
+  ['食べ物', 'ごはん おにぎり うどん そば もち だんご りんご みかん かき すいか なし いちご さかな やさい おかし'],
+  ['海と水', 'うみ なみ かわ いけ みずうみ しま ふね かい すな みず あわ しずく みなと'],
+  ['空と天気', 'そら くも かぜ あめ ゆき にじ かみなり ひかり はれ きり あらし たいよう'],
+  ['夜', 'よる つき ほし ゆめ やみ ねむり まくら ふとん あかり かげ しずけさ'],
+  ['町', 'まち みち はし えき でんしゃ くるま みせ いちば まど やね かべ とおり'],
+  ['家のもの', 'いえ へや たたみ こたつ ちゃわん かさ くつ かがみ とけい てがみ ほん つくえ'],
+  ['遊び', 'うた おどり まつり たこ こま ふえ たいこ えほん なぞなぞ かくれんぼ すもう'],
+  ['人の気持ち', 'こども はは ちち ともだち えがお なみだ こころ おもい こえ'],
+];
+// 版Lの記録で、めずらしいことば（読める行 9/17）・みじかいことば（4/11）は意味を壊したので外し、ながいことばに替えた
+const STYLES = [['oto', '音のことば'], ['ugoki', 'うごきのことば'], ['yousu', 'ようすのことば'], ['nagai', 'ながいことば']];
+// AIの性格。自由に書く問いに添え、言い回しに出す。好みと同じく画面には出さない。1回の4人には重ならないように配る
+const PERSONALITIES = ['のんびりした', 'せっかちな', 'おおらかな', 'こまかいことが気になる', 'ほがらかな', 'すこし皮肉っぽい',
+  '夢見がちな', 'まじめな', 'いたずら好きな', 'さみしがりの', '食いしん坊の', 'ものしりな'];
+
+let S = null;
+let langOpts = LANG;
+
+const pick = a => a[Math.floor(Math.random()*a.length)];
+const abortErr = () => new DOMException('中止', 'AbortError');
+const sleep = (ms, sig) => new Promise((res, rej) => {
+  if (sig.aborted) return rej(abortErr());
+  const t = setTimeout(() => { sig.removeEventListener('abort', on); res(); }, ms);
+  const on = () => { clearTimeout(t); rej(abortErr()); };
+  sig.addEventListener('abort', on, {once:true});
+});
+const esc = s => String(s).replace(/[&<>"]/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;'}[c]));
+const toHira = s => String(s).normalize('NFKC').replace(/[ァ-ヶ]/g, c => String.fromCharCode(c.charCodeAt(0) - 0x60));
+const textOf = paper => paper.chars.map(c => c.c).join('');
+const split575 = t => { const a = [...t]; return [a.slice(0,5), a.slice(5,12), a.slice(12)].map(x => x.join('')).join(' '); };
+function derange(n) {
+  const a = [...Array(n).keys()];
+  for (;;) {
+    for (let i = n - 1; i > 0; i--) { const j = Math.floor(Math.random()*(i+1)); [a[i], a[j]] = [a[j], a[i]]; }
+    if (a.every((v, i) => v !== i)) return a;
+  }
+}
+
+/* ---- 内蔵AI ---- */
+async function checkApi() {
+  const el = $('#api');
+  if (!('LanguageModel' in self)) { el.textContent = '非対応ブラウザ'; $('#setup').open = true; showUnsupported('このブラウザには、俳句を書く内蔵AI（Gemini Nano）がありません。パソコン版の Chrome 148 以降で開いてください。'); return; }
+  let st;
+  try { st = await LanguageModel.availability(LANG); }
+  catch { st = 'unavailable'; }
+  if (st === 'unavailable') {
+    // 言語指定に未対応の版では、指定なしで再確認する
+    try { st = await LanguageModel.availability(); langOpts = {}; } catch (e) { st = 'unavailable'; }
+  }
+  if (st === 'available') { el.textContent = '利用可'; $('#start').disabled = false; getBase().catch(() => {}); return; }
+  if (st === 'downloading') { el.textContent = 'モデル取得中'; fetchModel(); return; }
+  if (st === 'downloadable') { el.textContent = 'モデル未取得'; $('#fetch').hidden = false; $('#start').hidden = true; return; }
+  el.textContent = '端末非対応';
+  $('#setup').open = true;
+  showUnsupported('この端末では、俳句を書く内蔵AI（Gemini Nano）が動きません。ディスクの空き容量やメモリ・GPU の条件を満たしているかを確かめてください。');
+}
+// 非対応の環境で開いたときにダイアログで知らせる（モデルを取得すれば使える場合は出さない）
+function showUnsupported(text) {
+  const d = $('#unsupported');
+  $('#unsupported-text').textContent = text;
+  try { d.showModal(); } catch { d.setAttribute('open', ''); }
+}
+$('#unsupported-close').addEventListener('click', () => $('#unsupported').close());
+// ダイアログを閉じるとフォーカスが元の場所に戻ってスクロールが打ち消されるので、閉じたあとの描画でスクロールし、フォーカスはスクロールさせずに移す
+$('#unsupported-help').addEventListener('click', () => {
+  $('#unsupported').close(); $('#setup').open = true;
+  requestAnimationFrame(() => { $('#setup summary').focus({preventScroll: true}); $('#setup').scrollIntoView({behavior: calm() ? 'auto' : 'smooth', block: 'start'}); });
+});
+
+// モデルの取得と進捗表示。未取得から始めるときはクリック（ユーザー操作）が要る
+async function fetchModel() {
+  $('#fetch').hidden = true;
+  $('#start').hidden = false; $('#start').disabled = true; $('#start').textContent = '取得中…';
+  $('#api').textContent = 'モデル取得中';
+  $('#dl').hidden = false;
+  let t0 = 0, p0 = 0, last = Date.now();
+  // 30秒進まなければ知らせる（再読み込みで再開することがある）
+  const watch = setInterval(() => {
+    if (Date.now() - last > 30000) $('#dlpct').textContent = Math.floor($('#dlbar').value * 100) + '%（止まっているようです。再読み込みしてください）';
+  }, 5000);
+  try {
+    const s = await LanguageModel.create({...langOpts, monitor(m) {
+      m.addEventListener('downloadprogress', e => {
+        const now = last = Date.now();
+        if (!t0 && e.loaded > 0) { t0 = now; p0 = e.loaded; }
+        $('#dlbar').value = e.loaded;
+        let txt = Math.floor(e.loaded * 100) + '%';
+        const rate = t0 && now > t0 + 5000 ? (e.loaded - p0) / (now - t0) : 0;
+        if (rate > 0 && e.loaded < 1) txt += `（残り約${Math.max(1, Math.round((1 - e.loaded) / rate / 60000))}分）`;
+        if (e.loaded >= 1) txt = '展開中';
+        $('#dlpct').textContent = txt;
+      });
+    }});
+    s.destroy();
+    $('#dl').hidden = true;
+    $('#api').textContent = '利用可';
+    $('#start').disabled = false; $('#start').textContent = '始める';
+  } catch (e) {
+    $('#dl').hidden = true;
+    $('#api').textContent = '取得失敗（' + e.message + '）';
+    $('#fetch').hidden = false; $('#start').hidden = true; $('#start').textContent = '始める';
+    $('#setup').open = true;
+  } finally {
+    clearInterval(watch);
+  }
+}
+$('#fetch').addEventListener('click', fetchModel);
+
+// お手本の句。語の切れ目を空白で示す（答えも同じ書き方をさせるため）。
+// initialPrompts でお手本を入れたセッションをすぐ複製すると、内蔵AIのプロセスがクラッシュした
+// （Chrome は3回クラッシュすると内蔵AIを止める）。append() で入れ、一度答えさせてから複製すると無事だった。
+// 正規表現や JSON スキーマで答えを縛るのも、エラーやクラッシュになったので使わない
+const SHOTS = [
+  ['はる', ['はるの あさ', 'ことりの こえで', 'めが さめる']],
+  ['うみ', ['なつの うみ', 'しろい かもめが', 'とんで いく']],
+  ['つき', ['あきの よる', 'つきを みながら', 'みちを ゆく']],
+  ['ゆき', ['ゆきの あさ', 'あしあと ひとつ', 'つづく みち']],
+  ['はな', ['たんぽぽの', 'わたげが そらへ', 'たびに でる']],
+  ['たべもの', ['おにぎりを', 'ふたつ たべても', 'まだ たべる']],
+  ['ねこ', ['ねこの こが', 'ひなたで まるく', 'ねむりだす']],
+  ['あめ', ['あめあがり', 'みずたまりには', 'そらが ある']],
+  ['ねむい', ['げつようび', 'ふとんが ぼくを', 'はなさない']],
+  ['やま', ['やまのぼり', 'みんなで うたう', 'こえが する']],
+  ['そら', ['あおい そら', 'ひこうきぐもが', 'のびて いく']],
+  ['とり', ['すずめたち', 'でんせんの うえ', 'うたってる']],
+  ['まち', ['よるの まち', 'あかりが ぽつり', 'ともりだす']],
+  ['いぬ', ['こいぬがね', 'しっぽを ふって', 'まって いる']],
+  ['がっこう', ['ほうかごの', 'こうてい ひろく', 'かぜが ふく']],
+];
+const cutAt = h => [...h.join('')].slice(0, 1 + Math.floor(Math.random()*12)).join('');
+
+// 手本は、ページを開いたときに3句選んで元のセッションに一度だけ入れる。毎手の問いに入れるより1手あたり約0.6秒速い。
+// 1句だけだと同じ型を写しやすく、読める句が減った。3句なら毎手入れていたときより読める句が多かった
+const BAKED = [...SHOTS].sort(() => Math.random() - .5).slice(0, 3);
+const shotMsgs = ([th, rows]) => isHybrid() ? shotK([th, rows]) : VARIANT === 'I' ? shotI([th, rows]) : [
+  {role:'user', content:SYSTEM + '\n' + askNext(th, '', cutAt(rows.map(r => r.replace(/ /g, ''))))},
+  {role:'assistant', content:rows.join('\n')},
+];
+async function createSession(signal) {
+  const s = await LanguageModel.create({...langOpts, signal});
+  await s.append(BAKED.flatMap(shotMsgs), {signal});
+  await s.clone({signal}).then(c => c.prompt('はい', {signal}).finally(() => c.destroy())).catch(() => {});
+  return s;
+}
+// 元のセッションはテイクをまたいで使い回す。モデルの読み込み（約20秒）を開始前に済ませるため
+let BASE = null;
+const getBase = () => BASE ??= createSession(new AbortController().signal).catch(e => { BASE = null; throw e; });
+async function renewSession(signal) {
+  try { S.session?.destroy(); } catch {}
+  BASE = null;
+  S.session = await getBase();
+}
+async function cloneBase(signal) {
+  try { return await S.session.clone({signal}); }
+  catch (e) {
+    if (signal.aborted) throw abortErr();
+    console.warn('セッションを作り直します', e);
+    await renewSession(signal);
+    return S.session.clone({signal});
+  }
+}
+// 複製に問いかけを流し、shouldStop が真になったら打ち切る。ここまでの答えと、最後まで書き終えたかを返す
+async function ask(messages, shouldStop, signal, kind) {
+  const t0 = performance.now();
+  const s = await cloneBase(signal);
+  const stop = new AbortController();
+  const onAbort = () => stop.abort();
+  signal.addEventListener('abort', onAbort, {once:true});
+  let acc = '', done = false;
+  try {
+    for await (const chunk of s.promptStreaming(messages, {signal: stop.signal})) {
+      acc = chunk.startsWith(acc) && acc ? chunk : acc + chunk;
+      if (shouldStop(acc)) { stop.abort(); break; }
+    }
+    done = !stop.signal.aborted;
+  } catch (e) {
+    if (signal.aborted) throw abortErr();
+    if (e.name !== 'AbortError') throw e;
+  } finally {
+    signal.removeEventListener('abort', onAbort);
+    s.destroy();
+  }
+  const last = messages.filter(m => m.role === 'user').at(-1)?.content || '';
+  const prefix = messages.at(-1)?.prefix ? messages.at(-1).content : '';
+  addLog({type:'call', kind, ...S.cur, sec: (performance.now() - t0) / 1000,
+    prompt: last + (prefix ? `\n［答えの書き出し］\n${prefix}` : ''), out: prefix + acc, cut: !done, messages});
+  return {acc, done};
+}
+
+/* 一手。遊びの核は、紙を受け取った書き手が、紙のひらがなだけから自分で読み直し、意味が通るように自由に発想して
+   次の一字を書くこと。前の書き手が思い浮かべた語・語の切れ目・次の字は、次の書き手に一切渡さない。
+   版G（本命）：紙の字で始まる句を頭から丸ごと書かせ、書いた句が紙の字と一字残らず合うかを確かめてから次の一字を採る。
+   版P（比べる相手）：紙の字を「答えの書き出し」にして続きを書かせ、その最初の一字を採る（読み直しは確かめない） */
+const asLines = t => { const a = [...t]; return [a.slice(0,5), a.slice(5,12), a.slice(12)].map(x => x.join('')).filter((x, i) => i === 0 || x).join('\n'); };
+// 残りの字数は ○ の数で見せる（モデルは字数を数えるのが苦手）
+const template = t => { const a = [...t]; let i = 0; return ROWS.map(n => Array.from({length:n}, () => a[i++] ?? '○').join('')).join('\n'); };
+// 行の区切りと句の終わりだけは一言で伝える（字数は数えさせない）
+function lineHint(len) {
+  if (len === 5 || len === 12) return 'ここから新しい行です。\n';
+  if (len === LEN - 1) return 'あと一字で句が終わります。\n';
+  return '';
+}
+const ASK = {
+  P: 'この書き出しから、意味が通りそうな続きを書いてください。ふつうの日本語で、漢字を使ってかまいません。ことばの切れ目は一字あけます。',
+  G: 'この紙の字で始まる、意味の通る俳句を考えて、句の頭から全部、ひらがなだけで書いてください。紙の字は一字も変えません。ことばの切れ目は一字あけます。',
+  H: 'この紙の字で始まる、意味の通る俳句を考えて、句の頭から全部、ひらがなだけで書いてください。紙の字は一字も変えません。三行（五字・七字・五字）に分けて書きます。ことばの切れ目は一字あけます。',
+};
+const askNext = (theme, mood, text, extra = '') =>
+  `お題：${theme}\n${mood}ひらがなの俳句（五字・七字・五字）を、みんなで一字ずつ書いています。○が、まだ書かれていないところです。\n${template(text)}\n${lineHint([...text].length)}${extra}${ASK[VARIANT]}`;
+// 答えをひらがなの字の並びにする（空白・改行・句読点は除く）
+const squeeze = a => [...toHira(a).replace(/[\s、。・「」*＊]/g, '')];
+// 漢字を含むときは読みを聞く
+async function readingOf(words, signal) {
+  const q = w => `つぎのことばの読みを、ひらがなだけで書いてください。ほかのことは書きません。\n${w}`;
+  const {acc} = await ask([
+    {role:'user', content:q('夜のごはん')}, {role:'assistant', content:'よるのごはん'},
+    {role:'user', content:q(words)},
+  ], a => a.includes('\n') && a.trim().length > 0, signal, '読み');
+  return squeeze(acc.trim().split('\n')[0]);
+}
+const AHEAD = 4;
+// 版P：紙の字を書き出しにして、続きを数字だけ書かせる。漢字で始まったら読みを聞く
+async function ideaP(seat, paper, theme, extra, signal) {
+  const text = textOf(paper), len = [...text].length;
+  const msgs = [{role:'user', content:askNext(theme, seat.mood, text, extra)}];
+  if (len) msgs.push({role:'assistant', content:asLines(text), prefix:true});
+  const {acc} = await ask(msgs, a => squeeze(a).length >= AHEAD, signal, '続き');
+  const out = squeeze(acc), show = acc.replace(/\s+/g, ' ').trim();
+  if (KANA.includes(out[0])) return {c: out[0], haiku: `${text} → ${show}`};
+  if (/\p{Script=Han}/u.test(out[0] || '')) {
+    const r = await readingOf(text + out.join(''), signal);
+    if (r.slice(0, len).join('') === text && KANA.includes(r[len])) return {c: r[len], haiku: `${text} → ${show}（${r.slice(len).join('')}）`};
+  }
+  return null;
+}
+// 版G：紙の字で始まる句を頭から書かせ、紙の字と一字残らず合えば、その次の字を採る。紙の字数＋1字が出たら打ち切る
+async function ideaG(seat, paper, theme, extra, signal) {
+  const text = textOf(paper), len = [...text].length;
+  const {acc} = await ask([{role:'user', content:askNext(theme, seat.mood, text, extra)}], a => squeeze(a).length > len, signal, '読み直し');
+  const out = squeeze(acc), show = acc.replace(/\s+/g, ' ').trim();
+  if (out.slice(0, len).join('') !== text) return {fail: '紙の字と合わない', haiku: `${show}（紙の字と合わない）`};
+  if (KANA.includes(out[len])) return {c: out[len], haiku: show};
+  // 紙の字はひらがなで合っていて、続きだけ漢字にしたときは、続きの読みを聞く
+  if (/\p{Script=Han}/u.test(out[len] || '')) {
+    const r = await readingOf(out.slice(len).join(''), signal);
+    if (KANA.includes(r[0])) return {c: r[0], haiku: `${show}（${r.join('')}）`};
+  }
+  return {fail: '書けない字', haiku: `${show}（書けない字）`};
+}
+// 版H：句を三行で頭から書かせ、いま書いている行が5字（7字）ちょうどで終わり、それまでの行が紙と一字残らず合うときだけ、
+// その行の「紙の字の次」の字を採る。各行は、その行を書き終えた人の句の一行そのものになる。
+// 先の行は次の人が読み直すので確かめない。行どうしのつながりは書き手ごとに自由なので、思わぬ内容は残る
+const rowOf = len => len < 5 ? 0 : len < 12 ? 1 : 2;
+const paperRows = text => { const a = [...text]; return [a.slice(0, 5), a.slice(5, 12), a.slice(12)].map(x => x.join('')); };
+// 答えを行に分ける。最後の行が改行で終わっていなければ、書きかけとして closed=false
+const linesOf = acc => { const parts = acc.split('\n'), closed = parts.length > 1; const ls = parts.map(l => l.trim());
+  const done = ls.slice(0, -1).filter(Boolean), last = ls.at(-1); return {done, last}; };
+async function ideaH(seat, paper, theme, extra, signal) {
+  const text = textOf(paper), len = [...text].length, li = rowOf(len), rows = paperRows(text), want = ROWS[li];
+  // いまの行が書き終わる（その後に改行が来る）まで。いまの行が字数+3字を超えたら打ち切って不合格
+  const stop = a => { const {done, last} = linesOf(a); return done.length > li || squeeze(done[li] ?? last).length > want + 3; };
+  const {acc, done: finished} = await ask([{role:'user', content:askNext(theme, seat.mood, text, extra)}], stop, signal, '読み直し');
+  const {done, last} = linesOf(acc), lines = (finished && last ? [...done, last] : done).map(l => l.replace(/[、。・「」*＊]/g, ''));
+  const show = acc.trim().replace(/\n+/g, ' ／ ').replace(/\s+/g, ' ');
+  const plain = l => [...toHira(l).replace(/\s/g, '')];
+  const L = lines.map(plain), cur = L[li] || plain(last || '');
+  const before = rows.slice(0, li).every((r, j) => (L[j] || []).join('') === r);
+  const starts = cur.slice(0, [...rows[li]].length).join('') === rows[li];
+  const next = cur[[...rows[li]].length];
+  const okChars = l => l.every(c => KANA.includes(c));
+  // 条件1・2だけ通った答え（行の字数は合わない）。引き直しでも駄目なときに使う
+  const weak = before && starts && KANA.includes(next) ? {c: next, how: '行は合わず', haiku: `${show}（行の字数が合わない）`} : null;
+  if (!before || !starts) return {fail: '紙の字と合わない', haiku: `${show}（紙の字と合わない）`};
+  if (!L[li] || L[li].length !== want || !okChars(L[li])) return {fail: '行の字数が合わない', weak, haiku: `${show}（行の字数が合わない）`};
+  return {c: next, haiku: show};
+}
+// 版I：いま書いている行だけを書かせる。前の行は紙として見せるだけで写させない（写しの負担が紙の長さで増えない）。
+// 通す条件は、答えがいまの行の紙の字で始まり、行の字数ちょうどの位置で書き手自身が語を区切っている（空白・改行・終わり）こと
+const ROWNAME = ['一行目（五字）', '二行目（七字）', '三行目（五字）'];
+function askLineI(theme, mood, text, extra = '') {
+  const len = [...text].length, li = rowOf(len), cur = paperRows(text)[li];
+  const where = cur ? `いま書いているのは${ROWNAME[li]}で、「${cur}」まで書かれています。` : `${ROWNAME[li].slice(0, 3)}はまだ白紙です。`;
+  return `お題：${theme}\n${mood}みんなで一字ずつ書いている俳句（五字・七字・五字）です。○は、まだ書かれていないところです。\n${template(text)}\n${where}\n${extra}この${ROWNAME[li].slice(0, 3)}を、意味の通ることばで、頭から書いてください。ひらがなだけで書きます。紙の字は変えません。ことばの切れ目は一字あけます。`;
+}
+// お手本：途中までの紙と、その行だけの答え
+function shotI([th, rows]) {
+  const flat = rows.map(r => r.replace(/ /g, '')), li = Math.floor(Math.random() * 3), p = Math.floor(Math.random() * ROWS[li]);
+  const text = flat.slice(0, li).join('') + [...flat[li]].slice(0, p).join('');
+  return [{role:'user', content:SYSTEM + '\n' + askLineI(th, '', text)}, {role:'assistant', content:rows[li]}];
+}
+async function ideaI(seat, paper, theme, extra, signal) {
+  const text = textOf(paper), li = rowOf([...text].length), cur = [...paperRows(text)[li]], want = ROWS[li];
+  const first = a => a.split('\n').map(l => l.trim()).find(Boolean) || '';
+  const stop = a => /\S[^\n]*\n/.test(a) || squeeze(first(a)).length >= want + 3;
+  const {acc, done: finished} = await ask([{role:'user', content:askLineI(theme, seat.mood, text, extra)}], stop, signal, '行');
+  const line = first(acc).replace(/[、。・「」*＊]/g, ''), show = line;
+  const ended = finished || /\S[^\n]*\n/.test(acc);   // 行が書き終わっている
+  // 字を数えながら、書き手が区切った位置（空白のあと・行の終わり）を集める
+  const chars = [], cuts = new Set();
+  for (const ch of toHira(line)) { if (/\s/.test(ch)) { if (chars.length) cuts.add(chars.length); } else chars.push(ch); }
+  if (ended) cuts.add(chars.length);
+  const starts = chars.slice(0, cur.length).join('') === cur.join(''), next = chars[cur.length];
+  if (!starts || !KANA.includes(next)) return {fail: '紙の字と合わない', haiku: `${show}（紙の字と合わない）`};
+  const weak = {c: next, how: '行は合わず', haiku: `${show}（行の字数で区切れていない）`};
+  if (!cuts.has(want) || !chars.slice(0, want).every(c => KANA.includes(c))) return {fail: '行の字数で区切れていない', weak, haiku: weak.haiku};
+  return {c: next, haiku: show};
+}
+// Nano の口ぐせ。答えに出たかを見る正規表現と、用紙（ひらがな）での形
+const CLICHES = [[/きらめ|煌め|キラメ/, ['きらめ']], [/しずけさ|静けさ/, ['しずけさ']], [/そよかぜ|そよ風/, ['そよかぜ']]];
+const clicheIn = s => CLICHES.find(([re, ws]) => re.test(s) && S.papers.some(p => ws.some(x => textOf(p).includes(x))));
+// 一手：案を出し、だめなら引き直す。版Gは2回読み直せなければ版Pの続きに、それも出なければ代わりの字にする。
+// 前の書き手の想像には戻さない
+async function aiNext(seat, paper, theme, signal) {
+  if (['Q', 'R', 'S'].includes(VARIANT)) return aiNextQ(seat, paper, theme, signal);
+  if (isHybrid()) return aiNextK(seat, paper, theme, signal);
+  const idea = {G: ideaG, H: ideaH, I: ideaI}[VARIANT] || ideaP, tried = [];
+  let extra = '', weak = null;
+  for (let k = 0; k < 2; k++) {
+    const i = await idea(seat, paper, theme, extra, signal);
+    if (i && !i.fail) {
+      // 口ぐせの語が、このテイクの用紙にもう出ていれば、その語を避けるよう一言足して1回だけ引き直す
+      // その紙にもともとある口ぐせは数えない（紙の字を読み直しただけなので）
+      const w = !extra && clicheIn(i.haiku.replace(textOf(paper), ''));
+      if (w) { extra = `「${w[1][0]}」はもう使われています。ほかのことばにします。\n`; tried.push(i.haiku + '（口ぐせ）'); continue; }
+      return {...i, how: tried.length ? '引き直し' : '', haiku: [...tried, i.haiku].join(' ／ ')};
+    }
+    if (i) tried.push(i.haiku);
+    weak ??= i?.weak;
+  }
+  if (weak) return {...weak, haiku: [...tried, '（行の字数は合わないが紙の字は読めた答えを使う）'].join(' ／ ')};
+  if (['G', 'H', 'I'].includes(VARIANT)) {
+    const j = await ideaP(seat, paper, theme, '', signal);
+    if (j) return {...j, how: '読み直せず続き', haiku: [...tried, j.haiku].join(' ／ ')};
+  }
+  return {c: pick(START), how: '代わりの字', haiku: [...tried, '（続きが出なかったので代わりの字）'].join(' ／ ')};
+}
+
+/* ---- 行の候補：紙の字で始まり、行の字数ちょうどで終わる、語の並びをコードが数え上げる ----
+   語は辞書（haiku-dict.js）から。並べ方は、文節（語＋助詞など）を1〜3個つなぐ型に限る。
+   区切り方は毎手、紙の字だけからゼロでやり直すので、前の書き手の読みは渡らない */
+const PARTICLES = ['の', 'が', 'は', 'を', 'に', 'で', 'も', 'と', 'へ', 'や'];
+// 助詞のあと、行の途中でつづけてよい語の種類。N もの、P うごき・ようす・副詞、V うごき・副詞、* なんでも
+const NEXT_AFTER = {'の': 'N', 'が': 'P', 'は': '*', 'を': 'V', 'に': '*', 'で': '*', 'も': '*', 'と': '*', 'へ': 'V', 'や': '*'};
+const FITS = {N: 'N', P: 'VADK', V: 'VD', '*': 'NKVADT'};
+const DICT = (() => {
+  const list = DICT_SRC.split('\n').map((l, rank) => { const [rd, , cls] = l.split(','); return {rd, cls, rank}; });
+  const byFirst = new Map();
+  for (const w of list) { const c = w.rd[0]; if (!byFirst.has(c)) byFirst.set(c, []); byFirst.get(c).push(w); }
+  // 動詞の連用形と同じ形の名詞（はしり・みえ・のがれ）。2行目の余りを埋めて意味を壊していた（版Mの記録）
+  const verbs = new Set(list.filter(w => w.cls === 'V').map(w => w.rd));
+  const I2U = {き:'く', ぎ:'ぐ', し:'す', ち:'つ', に:'ぬ', び:'ぶ', み:'む', り:'る', い:'う'};
+  for (const w of list) if (w.cls === 'N') w.renyou = verbs.has(w.rd + 'る') || (I2U[w.rd.at(-1)] && verbs.has(w.rd.slice(0, -1) + I2U[w.rd.at(-1)]));
+  return {list, byFirst, has: new Map(list.map(w => [w.rd, w]))};
+})();
+// 文節の形。mid＝行の途中に置ける、end＝行の終わりに置ける、need＝行の途中に置くなら、すぐ後ろに来てよい語の種類（FITS）、
+// close＝句の最後（3行目の終わり）に置いて文が閉じる形（言い切り・助詞なしの名詞・名詞＋や）
+function bunsetsuOf(w) { return bunsetsuOf0(w).map(b => ({...b, rank: w.rank, cls: w.cls, bare: b.bare || b.s === w.rd})); }
+function bunsetsuOf0(w) {
+  switch (w.cls) {
+    // 助詞なしの名詞は、行の終わりか、すぐ後ろにうごき・ようすが来るとき（「さくら さく」）だけ
+    case 'N': return [...PARTICLES.map(p => ({s: w.rd + p, end: true, need: NEXT_AFTER[p], close: p === 'や'})), {s: w.rd, end: true, need: 'P', close: true, bare: true}];
+    case 'K': return [{s: w.rd + 'な', need: 'N'}, {s: w.rd + 'に', mid: true}, {s: w.rd, end: true, close: true}];
+    case 'A': case 'V': return [{s: w.rd, need: 'N', end: true, close: true}];
+    case 'D': return [{s: w.rd, need: 'P'}];
+    case 'T': return [{s: w.rd, need: 'N'}];
+  }
+  return [];
+}
+// 紙のいまの行（cur）で始まり、want 字ちょうどの行を数え上げる。
+// 組み合わせが多いので、毎回すこし乱した順で、各段 6 本までの枝だけをたどる探索を、上限 max 本か ms ミリ秒まで繰り返す。
+// prefer の語（お題から思いつく語、書き手がいま書いた語、書き手の好きなものの語）は、頻度にかかわらず上位に混ぜる。
+// style は書き手のことばの癖で、語の種類の選び方を偏らせる。close なら句の最後の行なので、文が閉じる形で終える。
+// 文節は2つまで（記録では、3文節の行は読める率が低かった：7字の行で 2/6、2文節は 15/19）
+const STYLE_CLS = {ugoki: 'V', yousu: 'AK'};
+const isOto = rd => rd.length >= 4 && rd.length % 2 === 0 && rd.slice(0, rd.length / 2) === rd.slice(rd.length / 2);   // ふわふわ、きらきら
+function enumerateLines(cur, want, prefer = new Set(), {style = '', close = false, max = 60, ms = 50} = {}) {
+  const out = [], t0 = performance.now(), seen = new Set(), perFirst = new Map();   // 最初の文節ごとに 6 本まで（候補をばらけさせる）
+  const key = w => {
+    if (prefer.has(w.rd)) return Math.random() * 40;
+    let r = w.rank;
+    if (STYLE_CLS[style]?.includes(w.cls) || style === 'oto' && isOto(w.rd) || style === 'nagai' && w.rd.length >= 4) r *= 0.15;
+    return r * (0.3 + Math.random());
+  };
+  const order = list => list.map(w => ({w, k: key(w)})).sort((a, b) => a.k - b.k).map(x => x.w);
+  const late = () => out.length >= max || performance.now() - t0 > ms;
+  const preferList = DICT.list.filter(w => prefer.has(w.rd));
+  const go = (pos, parts, need) => {
+    if (pos === want) {
+      const last = parts.at(-1);
+      const first = parts[0].s;
+      if (last.end && (!close || last.close) && (perFirst.get(first) || 0) < 6) { const line = parts.map(p => p.s).join(' '); if (!seen.has(line)) { seen.add(line); out.push({line, parts}); perFirst.set(first, (perFirst.get(first) || 0) + 1); } }
+      return;
+    }
+    if (parts.length >= 2 || late()) return;
+    const head = cur.slice(pos), c = head[0];
+    // 紙の字が残っていれば、それと食い違わない語だけに先に絞る。尽きていれば、頻度上位と prefer から少しだけ引く
+    const room = want - pos;
+    const pool = c
+      ? (DICT.byFirst.get(c) || []).filter(w => w.rd.length <= room && (w.rd.startsWith(head) || head.startsWith(w.rd) || head.startsWith(w.rd.slice(0, head.length))))
+      : [...preferList, ...Array.from({length: 80}, () => DICT.list[Math.floor(Math.random() ** 2 * 4000)])].filter(w => w && w.rd.length <= room);
+    let tried = 0;
+    for (const w of order(pool)) {
+      // 版N以降：3字以下の語は頻度上位 3000 語だけ。動詞の連用形と同じ形の名詞は上位 2000 語だけ（ひかり・おもい は残す）
+      if (fromN() && !prefer.has(w.rd) && (w.rd.length <= 3 && w.rank >= 3000 || w.renyou && w.rank >= 2000)) continue;
+      if (need && !FITS[need].includes(w.cls)) continue;
+      for (const b of bunsetsuOf(w)) {
+        const end = pos + [...b.s].length;
+        if (end > want) continue;
+        if (head && !(b.s.startsWith(head) || head.startsWith(b.s))) continue;
+        if (end < want && !b.need && !b.mid) continue;
+        if (end === want && !b.end) continue;
+        go(end, [...parts, b], end < want ? b.need || null : null);
+        if (late()) return;
+      }
+      if (++tried >= 6) return;   // 各段 6 語まで
+    }
+  };
+  for (let k = 0; k < 30 && !late(); k++) go(0, [], false);
+  return out;
+}
+// 候補から、次の一字が違うものを最大 k 本選ぶ。書き手がいま書いた語を含む行を先に、好きなものの語を含む行は1本まで。
+// 並び順は最後に混ぜる（記録では、内蔵AIは意味より並び順で選んでいた：1番 200・2番 125・3番 101・4番 20）
+const hasWord = (l, ws) => l.parts.some(p => [...ws].some(w => p.s.startsWith(w)));
+function pickLines(lines, cur, mine, likes = new Set(), k = 4) {
+  const n = [...cur].length, byNext = new Map();
+  const score = l => hasWord(l, mine) ? 0 : hasWord(l, likes) ? 1 : 2;
+  // 版N：同じ順位どうしは、いちばん珍しい語がなるべくよく使われる行を先に
+  const worst = l => fromN() ? Math.max(...l.parts.map(p => p.rank ?? 0)) : 0;
+  let liked = 0;
+  for (const l of [...lines].sort((a, b) => score(a) - score(b) || worst(a) - worst(b))) {
+    const c = [...l.line.replace(/ /g, '')][n];
+    if (!c || !KANA.includes(c) || byNext.has(c)) continue;
+    if (hasWord(l, likes) && !hasWord(l, mine)) { if (liked >= 1) continue; liked++; }   // 好きなものの語を含む候補は1本まで
+    byNext.set(c, l);
+    if (byNext.size >= k) break;
+  }
+  return [...byNext.values()].sort(() => Math.random() - .5);
+}
+
+/* ---- 版K（ハイブリッド）：自由に書く → だめなら、紙の字から組んだ行の候補から選ぶ ----
+   書き手が見るのは紙の字とお題だけ。前の書き手の読みはどこにも渡さない。
+   1. いまの行を自由に書かせる（字数は伝えない。伝えると意味のない並びで字数を埋めた）
+   2. 紙の字で始まり、行の字数ちょうどで区切れていれば、判定役に意味が通るかを聞く（行の最後の字は2回）。通れば次の一字
+   3. だめなら、コードが紙の字から行の候補を組み（辞書の語＋お題から思いついた語＋いま書いた語）、書き手が番号で選ぶ
+   4. どれも通らなければ書かずに回す（同じ用紙で2回続いたら、いちばん上の候補を使う） */
+const ROWWORD = ['一行目', '二行目', '三行目'];
+function askLineK(theme, mood, text, extra = '') {
+  const li = rowOf([...text].length), cur = paperRows(text)[li];
+  const where = cur ? `いま書いているのは${ROWWORD[li]}で、「${cur}」まで書かれています。` : `${ROWWORD[li]}はまだ白紙です。`;
+  return `お題：${theme}\n${mood}みんなで一字ずつ書いている俳句（五字・七字・五字）です。○は、まだ書かれていないところです。\n${template(text)}\n${where}\n${extra}この${ROWWORD[li]}を、意味の通ることばで、頭から書いてください。ひらがなだけで書きます。紙の字は変えません。ことばの切れ目は一字あけます。`;
+}
+function shotK([th, rows]) {
+  const flat = rows.map(r => r.replace(/ /g, '')), li = Math.floor(Math.random() * 3), p = Math.floor(Math.random() * ROWS[li]);
+  const text = flat.slice(0, li).join('') + [...flat[li]].slice(0, p).join('');
+  return [{role:'user', content:SYSTEM + '\n' + askLineK(th, '', text)}, {role:'assistant', content:rows[li]}];
+}
+// 判定役と、選ぶ役（お手本なし）のセッション。テイクをまたいで使い回す
+const judgeQ = l => `つぎのひらがなは、日本語のことばの並びとして意味が通りますか。「はい」か「いいえ」だけで答えます。\n${l}`;
+let JUDGE = null, PLAIN = null;
+const getJudge = () => JUDGE ??= (async () => {
+  const s = await LanguageModel.create({...langOpts});
+  await s.append([
+    {role:'user', content:judgeQ('あおい そらに')}, {role:'assistant', content:'はい'},
+    {role:'user', content:judgeQ('みのか ふるねぎ')}, {role:'assistant', content:'いいえ'},
+    {role:'user', content:judgeQ('ねこが ねむる')}, {role:'assistant', content:'はい'},
+    {role:'user', content:judgeQ('さこぬ ひたま')}, {role:'assistant', content:'いいえ'},
+  ]);
+  await s.clone().then(c => c.prompt('はい').finally(() => c.destroy())).catch(() => {});
+  return s;
+})().catch(e => { JUDGE = null; throw e; });
+const getPlain = () => PLAIN ??= LanguageModel.create({...langOpts}).catch(e => { PLAIN = null; throw e; });
+// 別のセッションの複製に一問だけ聞く（ログにも残す）
+async function askOn(base, content, signal, kind) {
+  const t0 = performance.now(), s = await (await base()).clone({signal});
+  try { const out = await s.prompt(content, {signal}); addLog({type:'call', kind, ...S.cur, sec: (performance.now() - t0) / 1000, prompt: content, out, messages: []}); return out; }
+  finally { s.destroy(); }
+}
+// 判定役。同じ行の結果はこのブラウザに覚えておく（again＝念のための2回目は覚えた結果を使わない）
+const JUDGE_CACHE = 'haiku-judge';
+const judgeMemo = (() => { try { return JSON.parse(localStorage.getItem(JUDGE_CACHE) || '{}'); } catch { return {}; } })();
+async function judge(line, signal, again = false) {
+  if (!again && line in judgeMemo) return judgeMemo[line];
+  const yes = /^\s*はい/.test(await askOn(getJudge, judgeQ(line), signal, '判定'));
+  if (!again) { judgeMemo[line] = yes; try { localStorage.setItem(JUDGE_CACHE, JSON.stringify(judgeMemo)); } catch {} }
+  return yes;
+}
+// お題から思いつく語を聞き、辞書にある語だけを残す（行の候補で優先する）
+// 一度聞いたお題の語は、このブラウザに覚えておく（準備で毎回10秒かかっていたため）
+const THEME_CACHE = 'haiku-theme-words';
+const cachedTheme = theme => { try { return JSON.parse(localStorage.getItem(THEME_CACHE) || '{}')[theme]; } catch { return null; } };
+const keepTheme = (theme, ws) => { try { const all = JSON.parse(localStorage.getItem(THEME_CACHE) || '{}'); all[theme] = ws; localStorage.setItem(THEME_CACHE, JSON.stringify(all)); } catch {} };
+async function themeWordsCached(theme, signal) {
+  const hit = cachedTheme(theme);
+  if (hit?.length) return new Set(hit);
+  const ws = await themeWords(theme, signal);
+  if (ws.size) keepTheme(theme, [...ws]);
+  return ws;
+}
+async function themeWords(theme, signal) {
+  const out = await askOn(getPlain, `お題「${theme}」から思いつく、ものの名前・うごき・ようすのことばを、ひらがなで二十こ、一字あけて書いてください。ほかのことは書きません。`, signal, 'お題の語');
+  return new Set(toHira(out).split(/[\s、,，・。]+/).map(w => w.replace(/[^ぁ-ゖ]/g, '')).filter(w => DICT.has.has(w)));
+}
+// 書き手が書いた行の語のうち、辞書にある語（助詞が付いていれば外して）
+const wordsIn = line => new Set(toHira(line).split(/\s+/).flatMap(t => [t, t.replace(new RegExp(`(${PARTICLES.join('|')})$`), '')]).filter(w => w.length >= 2 && DICT.has.has(w)));
+async function aiNextK(seat, paper, theme, signal) {
+  const text = textOf(paper), li = rowOf([...text].length), cur = paperRows(text)[li], want = ROWS[li];
+  const lastOfLine = [...cur].length + 1 === want, log = [];
+  // 1. 自由に書く。版M以降は、行の読みが決まる入口（行が0〜1字のとき）だけ。ほかの手は候補から始める
+  //    （版Lで自由に書いて通った手は1割なのに、毎手1秒強かかっていた）
+  const first = a => a.split('\n').map(l => l.trim()).find(Boolean) || '';
+  const freeTurn = !fromM() || [...cur].length <= 1;
+  const {acc, done: finished} = !freeTurn ? {acc: '', done: false} : await ask([{role:'user', content:askLineK(theme, seat.mood, text)}], a => /\S[^\n]*\n/.test(a) || squeeze(first(a)).length >= want + 4, signal, '行');
+  const line = first(acc).replace(/[、。・「」*＊]/g, '');
+  if (!freeTurn) log.push('（自由に書く手ではない）');
+  const chars = [], cuts = new Set();
+  for (const ch of toHira(line)) { if (/\s/.test(ch)) { if (chars.length) cuts.add(chars.length); } else chars.push(ch); }
+  if (finished || /\S[^\n]*\n/.test(acc)) cuts.add(chars.length);
+  // 自由に書いた行も、辞書の語で区切れる（3行目なら文が閉じる）ときだけ通す。区切れない行を紙に残すと、
+  // 次の書き手が候補を組めず、書き出しの続きに落ちて意味のない字が入った（版Lの記録「なず なずの」「はっけよい」）
+  const fits = chars.slice(0, [...cur].length).join('') === cur && cuts.has(want) && chars.slice(0, want).every(c => KANA.includes(c))
+    && enumerateLines(chars.slice(0, want).join(''), want, new Set(), {close: li === 2, max: 1}).length > 0;
+  if (freeTurn) log.push(line);
+  // 2. 字数が合えば判定役へ（行の最後の字は2回）
+  if (fits) {
+    const head = toHira(line).replace(/\s+/g, ' ').trim();
+    const shown = (() => { let n = 0, s = ''; for (const ch of head) { if (n >= want) break; s += ch; if (!/\s/.test(ch)) n++; } return s.trim(); })();
+    if (await judge(shown, signal) && (!lastOfLine || await judge(shown, signal, true))) return {c: chars[[...cur].length], line: chars.slice(0, want).join(''), how: '自由', haiku: `${shown}（自由に書いて通った）`};
+    log.push('（判定で落ちた）');
+  }
+  // 3. 候補から選ぶ
+  const mine = wordsIn(line), likes = seat.likeWords || new Set();
+  const prefer = new Set([...(paper.themeWords || []), ...mine, ...likes]);
+  let picks = pickLines(enumerateLines(cur, want, prefer, {style: seat.style, close: li === 2}), cur, mine, likes);
+  // 1手で必ず1字書く（書かずに回すと、用紙ごとに進み方がずれる）。候補がなければ、条件をゆるめて探し直す
+  if (!picks.length) picks = pickLines(enumerateLines(cur, want, prefer, {close: li === 2, max: 30, ms: 200}), cur, mine, likes);
+  if (!picks.length) {
+    const j = await ideaP(seat, paper, theme, '', signal);
+    return j ? {...j, how: '候補なし', haiku: `${log.join(' ／ ')} ／ ${j.haiku}`} : {c: pick(START), how: '代わりの字', haiku: log.join(' ／ ')};
+  }
+  const q = `お題：${theme}\nみんなで一字ずつ書いている俳句（五字・七字・五字）です。\n${template(text)}\nいま書いているのは${ROWWORD[li]}です。つぎのうち、日本語として意味が通るものを一つ選び、番号だけを書いてください。${seat.like ? `意味が通るものが二つ以上あるときだけ、あなたの好み（${seat.mood.replace(/。$/, '')}）に近いほうにします。` : ''}どれも意味が通らなければ 0 と書きます。\n` + picks.map((l, k) => `${k + 1}. ${l.line}`).join('\n');
+  const a = await askOn(getPlain, q, signal, '選ぶ');
+  const k = +(toHira(a).normalize('NFKC').match(/\d/)?.[0] ?? 0);
+  const cands = picks.map(l => l.line).join('／');
+  const use = (l, how, note = '') => ({c: [...l.line.replace(/ /g, '')][[...cur].length], line: l.line, how, haiku: `${log.join(' ／ ')} ／ 候補 ${cands} → ${note}${l.line}`});
+  // 判定役。好きなものの語を含む行は2回（版Lで行末の 0/5 を判定役が見逃した）
+  const ok = async l => await judge(l.line, signal) && !(hasWord(l, likes) && !await judge(l.line, signal, true));
+  const chosen = k >= 1 && k <= picks.length ? picks[k - 1] : null;
+  // 選んだ行をそのまま書く。ただし行の最後の一字は判定役に通す
+  if (chosen && (!lastOfLine || await ok(chosen))) return use(chosen, '候補');
+  // 選ばなかった（0）か、行末の判定で落ちた：ほかの候補を順に判定し、最初に通ったものを書く
+  for (const l of picks.filter(l => l !== chosen)) if (await ok(l)) return use(l, '候補（判定で次）', chosen ? `${chosen.line}（判定で落ちた） → ` : '（どれも選ばず） → ');
+  // どれも通らない：選んだ行か、いちばん上の候補を書く（回さない）
+  return use(chosen || picks[0], '候補（どれも通らず）', '（どれも判定を通らず） → ');
+}
+
+
+/* ---- 版Q：AIが字を言い出し、コードは成り立つかを確かめるだけ ----
+   候補を一覧にして選ばせる方式（版K〜O）では、内蔵AIの選んだ行は無作為に選んだ行と同じ率でしか意味が通らなかった
+   （試験：4本で 63% 対 63%、24本で 56% 対 69%）。句を決めていたのは辞書と乱数だった。
+   そこで毎手、AIに紙の字だけからいまの行を自由に書かせ、その「紙の字の次の一字」を起点にする。
+   1. AIの書いた行がそのまま行の字数で区切れ、辞書で区切れ、判定を通れば、その字（AIの字・自由）
+   2. AIの字から辞書で行を組み、AIの語を含む行から順に判定役に聞く（3本まで）。通ればその字（AIの字）
+   3. AIの語を含む、ほかの字の行を判定（2本まで）（AIの語）
+   4. 辞書だけの行を判定（3本まで）（辞書）。どれも通らなければ、いちばん上の段の行の字を書く（1手で必ず1字） */
+async function aiNextQ(seat, paper, theme, signal) {
+  // 版S：同じ回の中で、用紙ごとに決まり（Q か S）を変えて比べる。ほかの版は版の決まりのまま
+  const mode = VARIANT === 'S' ? paper.rule : VARIANT;
+  const text = textOf(paper), li = rowOf([...text].length), cur = paperRows(text)[li], want = ROWS[li], n0 = [...cur].length;
+  const close = li === 2, lastOfLine = n0 + 1 === want;
+  const first = a => a.split('\n').map(l => l.trim()).find(Boolean) || '';
+  // 版R：いまの行の書かれた字を「答えの書き出し」にして続きを書かせる。版Qでは行の3字目以降、AIは紙の字を続けずに
+  // 行を一から書き直し、AIの字が使えなかった（3字目 29%、5字目以降 0〜2%）。前の行は紙として見せるだけで続けさせない
+  const pre = (mode === 'R' || mode === 'S') && cur ? [{role:'assistant', content:cur, prefix:true}] : [];
+  // 版R：書き出しを渡すと、AIは見えている前の行の語をそのまま続けがちだった（やさいある／やさいひろめる）ので一言添える
+  const noRepeat = li > 0 ? '前の行と同じことばは、くりかえしません。\n' : '';
+  const {acc: acc0, done: finished} = await ask([{role:'user', content:askLineK(theme, seat.mood, text, noRepeat)}, ...pre], a => /\S[^\n]*\n/.test((pre.length ? cur : '') + a) || squeeze(first((pre.length ? cur : '') + a)).length >= want + 4, signal, '行');
+  const acc = (pre.length ? cur : '') + acc0;
+  const line = first(acc).replace(/[、。・「」*＊]/g, '');
+  const chars = [], cuts = new Set();
+  for (const ch of toHira(line)) { if (/\s/.test(ch)) { if (chars.length) cuts.add(chars.length); } else chars.push(ch); }
+  if (finished || /\S[^\n]*\n/.test(acc)) cuts.add(chars.length);
+  const starts = chars.slice(0, n0).join('') === cur, aiChar = chars[n0];
+  const mine = wordsIn(line), likes = seat.likeWords || new Set();
+  const prefer = new Set([...(paper.themeWords || []), ...mine, ...likes]);
+  const head = `${line}`;
+  const ok = async l => await judge(l, signal) && !(lastOfLine && !await judge(l, signal, true));   // 行の最後の字は2回
+  const write = (l, how, note = '') => ({c: [...l.replace(/\s/g, '')][n0], line: l, how, haiku: `${head} → ${note}${l}`});
+  // 版R：1・2行目では、うごき・ようすの言い切りで終わる行を各段の中で後回しにする（版Qで三行が三つの文に分かれ、閉じる率が 42% → 13%）
+  const endsPred = l => { const p = l.parts.at(-1); return 'VA'.includes(p.cls) || p.cls === 'K' && p.bare; };
+  // 版R：前の行で使った語（2字以上）をくり返す行は、どの段でも使わない
+  // 前の行のくり返し（どの決まりでも避ける）：前の行の語（2字以上）を含む、前の行と同じ3字の並びを含む、前の行と同じ2字で始まる。
+  // 利用者が「言葉の繰り返しはかなり気になる」とした。S試験の Q決まりの用紙では、24句中15句にくり返しがあった
+  const prevRows = paperRows(text).slice(0, li).filter(Boolean);
+  const repeatsFlat = flat => li > 0 && (prevRows.some(r => r.slice(0, 2) === flat.slice(0, 2))
+    || [...flat].some((_, k) => k + 3 <= [...flat].length && prevRows.some(r => r.includes([...flat].slice(k, k + 3).join('')))));
+  const repeats = l => repeatsFlat(l.line.replace(/\s/g, '')) || li > 0 && l.parts.some(p => { const w = p.s.replace(new RegExp(`(${PARTICLES.join('|')})$`), ''); return w.length >= 2 && prevRows.some(r => r.includes(w)); });
+  // 版R はくり返しを使わず、言い切りを後回し。版S はくり返しを後回しにするだけ（禁止すると候補が尽きた）
+  // くり返しのない行があれば、そちらだけを使う。1本もないときだけくり返しの行を使う（候補を枯らさないため）
+  // strict：AIの字・AIの語の段では、くり返しの行を一切使わない（その段を飛ばして辞書の段へ進む）。
+  // 以前は段ごとに「1本もなければくり返しを使う」としていたため、AIの字がくり返しにしかつながらないとき、くり返しがそのまま通っていた
+  const later = (ls, strict) => { const kept = ls.filter(l => !repeats(l)), base = kept.length || strict ? kept : ls;
+    return mode === 'R' && li < 2 ? [...base].sort((a, b) => endsPred(a) - endsPred(b)) : base; };
+  const tiers = [];
+  // 1. AIの書いた行そのもの
+  if (starts && cuts.has(want) && chars.slice(0, want).every(c => KANA.includes(c))) {
+    const mineLine = enumerateLines(chars.slice(0, want).join(''), want, new Set(), {close, max: 1});
+    if (mineLine.length && !repeats(mineLine[0]) && await ok(mineLine[0].line)) return write(mineLine[0].line, 'AIの字（自由）');
+  }
+  // 2. AIの字から組んだ行。版S は、AIが書こうとした語（いまの字を含む語）が辞書にあり、その語をそのまま含む行だけ
+  //    （版R では「その字から何か組めれば採用」だったので、AIの語と無関係な行の継ぎはぎになり、意味の通る率が 12% に落ちた）
+  if (starts && KANA.includes(aiChar) && mode === 'S') {
+    const toks = toHira(line).split(/\s+/).filter(Boolean); let at = 0, word = '', wordAt = 0;
+    for (const t of toks) { const n = [...t].length; if (at <= n0 && n0 < at + n) { word = t; wordAt = at; break; } at += n; }
+    const stem = word.replace(new RegExp(`(${PARTICLES.join('|')})$`), '');
+    const inDict = [word, stem].find(w => w && DICT.has.has(w));
+    if (inDict) {
+      const ls = later(enumerateLines(cur + aiChar, want, new Set([...prefer, inDict]), {style: seat.style, close, max: 60, ms: 120}), true)
+        .filter(l => [...l.line.replace(/\s/g, '')].slice(wordAt, wordAt + [...inDict].length).join('') === inDict);
+      tiers.push(...ls.slice(0, 1));
+      for (const l of ls.slice(0, 3)) if (await ok(l.line)) return write(l.line, 'AIの字');
+    }
+  } else if (starts && KANA.includes(aiChar)) {
+    const ls = later(enumerateLines(cur + aiChar, want, prefer, {style: seat.style, close, max: 60, ms: 120}), true).sort((a, b) => (hasWord(b, mine) ? 1 : 0) - (hasWord(a, mine) ? 1 : 0));
+    tiers.push(...ls.slice(0, 1));
+    for (const l of ls.slice(0, 3)) if (await ok(l.line)) return write(l.line, 'AIの字');
+  }
+  // 3・4. 紙の字から組んだ行。AIの語を含む行を先に
+  const all = enumerateLines(cur, want, prefer, {style: seat.style, close, max: 60, ms: 120});
+  const withMine = later(all.filter(l => mine.size && hasWord(l, mine)), true), others = later(pickLines((nonRep => nonRep.length ? nonRep : all)(all.filter(l => !withMine.includes(l) && !repeats(l))).filter(l => !withMine.includes(l)), cur, new Set(), likes, 3));
+  tiers.push(...withMine.slice(0, 1), ...others.slice(0, 1));
+  for (const l of withMine.slice(0, 2)) if (await ok(l.line)) return write(l.line, 'AIの語');
+  for (const l of others) if (await ok(l.line)) return write(l.line, '辞書');
+  // どれも判定を通らない：いちばん上の段の行の字を書く
+  if (tiers.length) return write(tiers[0].line, '判定を通らず', '（どれも判定を通らず） ');
+  const j = await ideaP(seat, paper, theme, '', signal);
+  return j ? {...j, how: '候補なし'} : {c: pick(START), how: '代わりの字', haiku: head};
+}
+
+/* ---- ログ：呼び出しごとのプロンプト・秒数・返答と、一手ごとに書いた字 ---- */
+function addLog(e) {
+  e.at = (performance.now() - S.t0) / 1000;
+  S.log.push(e);
+  $('#log-count').textContent = S.log.length;
+  const tr = document.createElement('tr');
+  tr.className = e.type;
+  const cells = e.type === 'move'
+    ? [e.at.toFixed(1), e.seat, `用紙${e.paper}`, `書いた：${e.how}`, e.sec.toFixed(1), e.sheet || '（白紙）', e.out || '', e.char]
+    : [e.at.toFixed(1), e.seat, `用紙${e.paper}`, e.kind, e.sec.toFixed(1), e.prompt, e.out + (e.cut ? ' …（打ち切り）' : ''), ''];
+  for (const c of cells) { const td = document.createElement('td'); td.textContent = c; tr.appendChild(td); }
+  $('#log-rows').appendChild(tr);
+}
+$('#log-save').addEventListener('click', () => {
+  if (!S?.log?.length) return;
+  const meta = {date: new Date().toISOString(), players: S.n, papers: S.papers.map(p => ({theme: p.theme, text: textOf(p)}))};
+  const blob = new Blob([JSON.stringify({meta, log: S.log}, null, 1)], {type:'application/json'});
+  const a = document.createElement('a');
+  a.href = URL.createObjectURL(blob);
+  a.download = `haiku-log-${meta.date.replace(/[:.]/g, '-')}.json`;
+  a.click();
+  setTimeout(() => URL.revokeObjectURL(a.href), 1000);
+});
+
+/* ---- 記録：公開まで終わった回を IndexedDB に溜める（回をまたいで、ページを開き直しても残る） ---- */
+// プロンプトの版。?v=B のように URL で切り替え、記録に残して版どうしを比べる
+const VARIANT = ['P', 'G', 'H', 'I', 'K', 'L', 'M', 'N', 'O', 'Q', 'R', 'S'].includes(new URLSearchParams(location.search).get('v')) ? new URLSearchParams(location.search).get('v') : 'S';
+// 版K：ハイブリッド。版L：版Kに、句の終わりの形・文節2つまで・並び順の混ぜ・行末の判定・AIの好みを足したもの
+function isHybrid() { return ['K', 'L', 'M', 'N', 'O', 'Q', 'R', 'S'].includes(VARIANT); }
+// 版M以降の調整（自由に書くのは行の頭だけ、選ぶ問いは二段、好きなものの行は行末で判定2回）
+function fromM() { return ['M', 'N', 'O', 'Q', 'R', 'S'].includes(VARIANT); }
+// 版N以降の調整（短い語の絞り込み・候補の並べ方）。版Oは、書かずに回す手をなくし、1手で必ず1字書く
+function fromN() { return ['N', 'O', 'Q', 'R', 'S'].includes(VARIANT); }
+const DB = new Promise((res, rej) => { const r = indexedDB.open('haiku-relay', 1);
+  r.onupgradeneeded = () => r.result.createObjectStore('takes', {autoIncrement:true});
+  r.onsuccess = () => res(r.result); r.onerror = () => rej(r.error); });
+const store = (mode, f) => DB.then(db => new Promise((res, rej) => {
+  const t = db.transaction('takes', mode), q = f(t.objectStore('takes'));
+  t.oncomplete = () => res(q?.result); t.onerror = () => rej(t.error); }));
+const showCount = () => store('readonly', s => s.count()).then(n => $('#hist-count').textContent = n);
+function saveTake() {
+  const rec = {date: new Date().toISOString(), variant: VARIANT, baked: BAKED.map(b => b[0]),
+    seats: S.seats.map(s => ({name: s.name, personality: s.personality || '', like: s.like || '', style: s.style || '', likeWords: [...(s.likeWords || [])]})),
+    papers: S.papers.map(p => ({rule: p.rule, theme: p.theme, text: textOf(p), reading: p.reading || '', readTries: p.readTries || 0, note: p.note || '', passed: p.passed || [], themeWords: [...(p.themeWords || [])],
+      moves: p.chars.map(ch => ({c: ch.c, by: ch.by, mood: S.seats[ch.by].mood, how: ch.how, idea: ch.idea, sec: ch.sec}))})),
+    log: S.log.map(({messages, ...e}) => e)};
+  return store('readwrite', s => s.add(rec)).then(showCount);
+}
+$('#variant').textContent = VARIANT;
+showCount();
+$('#hist-save').addEventListener('click', async () => {
+  const all = await store('readonly', s => s.getAll());
+  const a = document.createElement('a');
+  a.href = URL.createObjectURL(new Blob([JSON.stringify(all, null, 1)], {type:'application/json'}));
+  a.download = `haiku-history-${new Date().toISOString().replace(/[:.]/g, '-')}.json`;
+  a.click(); setTimeout(() => URL.revokeObjectURL(a.href), 1000);
+});
+// 消すのは2回押したときだけ（確認ダイアログは使わない）
+$('#hist-clear').addEventListener('click', e => {
+  const b = e.currentTarget;
+  if (!b.dataset.armed) { b.dataset.armed = '1'; b.textContent = 'もう一度押すと消えます'; setTimeout(() => { delete b.dataset.armed; b.textContent = '記録を消す'; }, 4000); return; }
+  delete b.dataset.armed; b.textContent = '記録を消す';
+  store('readwrite', s => s.clear()).then(showCount);
+});
+
+/* ---- 描画 ---- */
+const calm = () => matchMedia('(prefers-reduced-motion: reduce)').matches;
+const gapAt = k => k === 5 || k === 12 ? '<br>' : '';
+// 短冊の中身。書いた字だけを墨で置く（誰が書いたかは公開のときに「書いた順」で見せる）
+function tanzakuInner(paper, {fresh = false} = {}) {
+  const n = paper.chars.length;
+  return paper.chars.map((ch, k) => gapAt(k) + `<span class="c${fresh && k === n - 1 ? ' new' : ''}">${ch.c}</span>`).join('');
+}
+const STATUS = {idle:'', wait:'', think:'執筆中', done:''};
+// 字数の表示。1巡で4枚とも1字ずつ進むので、巡の途中は書き終えた巡の字数（いちばん少ない用紙）を出す
+function setProgress(len) {
+  $('#progress').innerHTML = Array.from({length:LEN}, (_, k) => `<i class="${k < len ? 'on' : ''}${k === 5 || k === 12 ? ' cut' : ''}"></i>`).join('');
+  $('#count-label').textContent = S ? `${len} / ${LEN} 字` : '';
+}
+const PLAYERS = 4;   // 人数は4で固定（公開まで1画面に収まるように）
+function render() {
+  const box = $('#stage');
+  if (!S) {
+    // 開始前：人数ぶんの白い短冊を置いておく
+    const n = PLAYERS;
+    box.dataset.phase = 'idle';
+    // 始めたあとと同じ形にしておく（始めた瞬間に短冊が動かないように）
+    box.innerHTML = Array.from({length:n}, () => '<article class="poem seat"><div class="side"></div><div class="tz"></div></article>').join('');
+    setProgress(0);
+    return;
+  }
+  setProgress(Math.min(...S.papers.map(p => p.chars.length)));
+  if (S.phase === 'reveal') return;   // 公開中は reveal() が舞台を直接書き換える
+  box.dataset.phase = 'play';
+  // 用紙は動かさず、書き手の名札が用紙から用紙へ移る（FLIP で元の位置から滑らせる）
+  const before = new Map([...box.querySelectorAll('header[data-seat]')].map(e => [e.dataset.seat, e.getBoundingClientRect()]));
+  box.innerHTML = S.papers.map((paper, p) => {
+    const i = S.hold.indexOf(p), seat = S.seats[i], state = STATUS[seat.status];
+    return `<article class="poem seat ${seat.status}" style="--gs:var(--g${i+1})">
+      <div class="side"><h2 class="sr">用紙${p + 1}</h2>
+        <header data-seat="${i}"><span class="dot"></span><span class="name">${esc(seat.name)}</span><span class="state">${state}</span></header></div>
+      <div class="tz">${tanzakuInner(paper, {fresh: paper.fresh})}</div>
+    </article>`;
+  }).join('');
+  S.papers.forEach(p => p.fresh = false);
+  if (before.size && !calm()) box.querySelectorAll('header[data-seat]').forEach(e => {
+    const a = before.get(e.dataset.seat), b = e.getBoundingClientRect();
+    if (a && Math.abs(a.left - b.left) > 1) e.animate([{transform:`translate(${a.left - b.left}px, ${a.top - b.top}px)`}, {transform:'none'}], {duration:450, easing:'cubic-bezier(.2,.7,.2,1)'});
+  });
+}
+// 段階の表示。読み上げは、一手ごとに変わる「執筆中」「用紙回送中」と秒読み以外のときだけ
+// 一手の検証。問題がなければ空文字を返す
+function invalidMove(paper, r) {
+  const text = textOf(paper), n = [...text].length;
+  if (n >= LEN) return '用紙はもう17字';
+  if (!KANA.includes(r.c)) return `書けない字「${r.c}」`;
+  if (r.line) {
+    const li = rowOf(n), cur = paperRows(text)[li], flat = [...r.line.replace(/\s/g, '')];
+    if (flat.length !== ROWS[li]) return `行の字数が${flat.length}字（${ROWS[li]}字のはず）`;
+    if (flat.slice(0, [...cur].length).join('') !== cur) return '行が紙の字で始まっていない';
+    if (flat[[...cur].length] !== r.c) return '書く字が行の次の字と違う';
+  }
+  return '';
+}
+const setPhase = t => {
+  $('#phase').textContent = t;
+  if (!/^(執筆中|用紙回送中|公開済　次回まで)/.test(t)) $('#announce').textContent = t;
+};
+
+/* ---- 1テイク ---- */
+const isAuto = () => document.querySelector('input[name=mode]:checked')?.value === 'auto';
+const AUTO_WAIT = 10;   // 自動のとき、公開済のあと次の回を始めるまでの秒数
+async function runTake() {
+  const n = PLAYERS;
+  let next = false;
+  const ac = new AbortController(), signal = ac.signal;
+  const shuffled = a => [...a].sort(() => Math.random() - .5);
+  // 手本と同じお題は使わない（手本の言葉を写しやすいため）
+  const themes = shuffled(THEMES.filter(t => !BAKED.some(([th]) => th === t))).slice(0, n), moods = shuffled(MOODS), likes = shuffled(LIKES), personalities = shuffled(PERSONALITIES), plain = Math.floor(Math.random() * n);
+  const sRule = Math.random() < .5 ? 'Q' : 'S';
+  $('#log-rows').innerHTML = ''; $('#log-count').textContent = '0';
+  S = {
+    t0: performance.now(), log: [], cur: {},
+    n, ac, phase:'deal',
+    seats: Array.from({length:n}, (_, i) => {
+      // 4人のうち1人は好みなし（好みが意味を壊していないかを、同じ回の中で比べるため）
+      const personality = personalities[i], trait = `あなたは${personality}性格です。`;
+      if (i === plain) return {name: `AI ${i + 1}`, status:'idle', haiku:'', personality, like:'', style:'', styleLabel:'', likeWords: new Set(), mood: trait};
+      const [like, words] = likes[i], [style, styleLabel] = pick(STYLES);
+      return {name: `AI ${i + 1}`, status:'idle', haiku:'', personality, like, style, styleLabel,
+        likeWords: new Set(words.split(' ').filter(w => DICT.has.has(w))),
+        mood: `${trait}${like}が好きで、${styleLabel}が好きです。`};
+    }),
+    // 版S：回ごとに、4枚とも版Qの決まりか、4枚とも版Sの決まりかを無作為に決める（くり返し禁止はどちらにも掛かる）
+    papers: themes.map(theme => ({theme, chars:[], fresh:false, rule: VARIANT === 'S' ? sRule : VARIANT})),
+    hold: [...Array(n).keys()],
+  };
+  $('#start').textContent = '始める';
+  $('#start').hidden = true; $('#stop').hidden = false;
+  render();
+  const pace = () => 500;   // 一手ごとの間（ミリ秒）
+  const write = async (i, first) => {
+    const seat = S.seats[i], p = S.hold[i], text = textOf(S.papers[p]);
+    seat.status = 'think'; render();
+    const t0 = performance.now();
+    S.cur = {seat: seat.name, paper: p + 1, sheet: text};
+    let r = first ? (await sleep(150 + Math.random()*300, signal), {c: pick(START), haiku: ''})
+      : await aiNext(seat, S.papers[p], S.papers[p].theme, signal);
+    addLog({type:'move', ...S.cur, sec: (performance.now() - t0) / 1000, char: r.pass ? '（回した）' : r.c, how: r.how || (first ? '書き出し' : ''), out: r.haiku});
+    const P = S.papers[p];
+    // 書く前の検証：書ける字か、用紙が17字を超えないか、選んだ行が紙の字で始まり行の字数ちょうどで、書く字がその次の字か。
+    // 合わなければ書かずに回し、ログに残す
+    if (!r.pass && !first) {
+      const why = invalidMove(P, r);
+      // 1手で必ず1字。検証に合わなければ、回さずに、紙の字の続きを書かせた字にする（その字も検証する）
+      if (why) {
+        addLog({type:'move', ...S.cur, sec: 0, char: '（検証で書き直し）', how: '検証', out: `${why}：${r.haiku || ''}`});
+        const j = await ideaP(seat, P, P.theme, '', signal);
+        r = j && !invalidMove(P, j) ? {...j, how: '検証で書き直し', haiku: `${why} → ${j.haiku}`} : {c: pick(START), how: '検証で代わりの字', haiku: why};
+      }
+    }
+    // 書かずに回した手は字を足さない。回した回数を数え、書いたら戻す
+    if (r.pass) { P.passes = (P.passes || 0) + 1; (P.passed ??= []).push({by:i, idea:r.haiku || ''}); }
+    else { P.passes = 0; P.chars.push({c:r.c, by:i, how:r.how || '', idea:r.haiku || '', sec:(performance.now() - t0) / 1000}); P.fresh = true; }
+    seat.status = 'done'; seat.haiku = (r.how ? `${r.how}：` : '') + r.haiku; render();
+  };
+  // 内蔵モデルは同時に使わない（クラッシュしやすい）ので、順番に書く。
+  // 見る側が次を追いやすいよう、名札がどう入れ替わっても、いつも左の用紙から順に書く
+  // 書き終わった用紙（17字）は飛ばす。書かずに回す手があるので、用紙ごとに字数がずれることがある
+  const runRound = async first => {
+    for (let p = 0; p < n; p++) { if (S.papers[p].chars.length >= LEN) continue; await write(S.hold.indexOf(p), first); if (pace()) await sleep(pace() / 2, signal); }
+  };
+  try {
+    setPhase('準備中');
+    S.session = await getBase();
+    // 版K：判定役・選ぶ役を用意し、用紙ごとにお題から思いつく語を聞いておく
+    if (isHybrid()) { await getJudge(); await getPlain(); for (const [k, paper] of S.papers.entries()) { S.cur = {seat: '準備', paper: k + 1, sheet: ''}; paper.themeWords = await themeWordsCached(paper.theme, signal).catch(() => new Set()); } }
+    setPhase('執筆中');
+    S.seats.forEach(s => s.status = 'wait'); render();
+    await runRound(true);
+
+    while (S.papers.some(p => p.chars.length < LEN)) {
+      await sleep(pace(), signal);
+      S.phase = 'shuffle'; setPhase('用紙回送中');
+      await sleep(400, signal);
+      const perm = derange(n);
+      S.hold = perm.map(j => S.hold[j]);
+      S.phase = 'write'; S.seats.forEach(s => { s.status = 'wait'; s.haiku = ''; });
+      setPhase('執筆中');
+      render();
+      await runRound(false);
+      // 1巡ごとに、4枚の字数がそろっているかを確かめる（1手で必ず1字なので、ずれていれば不具合）
+      const lens = S.papers.map(p => p.chars.length);
+      if (new Set(lens).size > 1) { console.error('用紙の字数がずれた', lens); addLog({type:'call', kind:'検証', seat:'', paper:'', sheet:'', sec:0, prompt:'用紙の字数がそろっているか', out:`ずれた：${lens.join(' / ')}`, messages:[]}); }
+    }
+
+    await sleep(pace(), signal);
+    await reveal(signal);
+    setPhase('公開済'); $('#start').textContent = 'もう一回';
+    await saveTake().catch(e => console.warn('記録に失敗', e));
+    // 自動のときは、全体を10秒見せてから次の回を始める（途中で手動に戻したらそこで止まる）
+    for (let t = AUTO_WAIT; t > 0 && isAuto(); t--) { setPhase(`公開済　次回まで${t}秒`); await sleep(1000, signal); }
+    if (isAuto()) next = true; else setPhase('公開済');
+  } catch (e) {
+    if (e.name === 'AbortError') setPhase('中止');
+    else { setPhase('異常：' + e.message); console.error(e); }
+  } finally {
+    S.session = null;
+    for (const s of S.seats) if (s.status !== 'done') s.status = 'idle';
+    $('#start').hidden = false; $('#stop').hidden = true;
+    render();
+  }
+  if (next) runTake();
+}
+// 公開のとき、ひらがなの句にひとこと感想を付ける（AIの推測）。
+// 漢字かなまじりへの書き直し（清書）はやめた：字が変わらないか照らし合わせて3回やり直しても通らない句が多かったため。句は短冊のまま見せる
+async function commentOn(paper, el, signal) {
+  const note = el.querySelector('.note');
+  note.classList.add('wait'); note.textContent = '読んでいます…';
+  try {
+    const q = t => `つぎのひらがなの俳句を読んで、ひとこと感想を書いてください。感想だけを一文で書きます。\n${t}`;
+    const {acc} = await ask([
+      {role:'user', content:q('ゆうぐれの\nまどにうつれる\nあかとんぼ')},
+      {role:'assistant', content:'窓ごしの赤とんぼに、秋の夕方の静けさを感じます。\n'},
+      {role:'user', content:q(asLines(textOf(paper)))},
+    ], a => /\S[^\n]*\n/.test(a), signal, '感想');
+    paper.note = (acc.split('\n').map(l => l.trim()).find(Boolean) || '').replace(/^感想[：:]\s*/, '').replace(/\*/g, '');
+    note.textContent = paper.note;
+  } catch (e) {
+    if (e.name === 'AbortError') throw e;
+    note.textContent = '';
+  } finally { note.classList.remove('wait'); }
+}
+
+// 公開：同じ舞台を用紙の順に並べ直し、1枚ずつ表に返して、1字ずつ出し、清書と感想を付ける
+async function reveal(signal) {
+  S.phase = 'reveal';
+  S.seats.forEach(s => s.status = 'idle');
+  setPhase('公開中');
+  const box = $('#stage');
+  box.dataset.phase = 'reveal';
+  box.innerHTML = S.papers.map((paper, p) => `<article class="poem">
+      <div class="side"><h2 class="sr">用紙${p + 1}</h2><p class="note"></p>
+        <details class="trace"><summary>書いた順</summary><ol>${paper.chars.map(ch =>
+          `<li style="--gs:var(--g${ch.by+1})"><i></i>${esc(S.seats[ch.by].name)}「${ch.c}」</li>`).join('')}</ol></details></div>
+      <div class="tz">${tanzakuInner(paper)}</div>
+    </article>`).join('');
+  for (let p = 0; p < S.n; p++) {
+    const paper = S.papers[p], el = box.children[p];
+    // 内蔵AIは同時に使わない（クラッシュしやすい）ので、1枚ずつ待つ
+    S.cur = {seat: '公開', paper: p + 1, sheet: textOf(paper)};
+    await commentOn(paper, el, signal);
+  }
+}
+
+$('#start').addEventListener('click', runTake);
+$('#stop').addEventListener('click', () => S?.ac.abort());
+render();
+checkApi();
+})();
+</script>
+</body>
+</html>
